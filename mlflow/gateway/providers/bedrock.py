@@ -57,12 +57,30 @@ class AmazonBedrockAnthropicAdapter(AnthropicAdapter):
         return super().model_to_completions(payload, config)
 
 
+def _raise_for_unsupported_top_k(payload: dict, model_family: str) -> None:
+    """
+    Neither Titan nor Jurassic-2 supports top-k sampling. Titan's textGenerationConfig has
+    no such field, and Jurassic's `topKReturn` controls how many alternative tokens are
+    reported rather than how sampling is restricted, so there is nothing to map `top_k`
+    onto. Reject it instead of accepting and silently ignoring it.
+    """
+    if (top_k := payload.get("top_k")) is not None:
+        raise AIGatewayException(
+            status_code=422,
+            detail=(
+                f"'top_k' is not supported for {model_family} models. Received value: '{top_k}'."
+            ),
+        )
+
+
 class AWSTitanAdapter(ProviderAdapter):
-    # NB: `top_k` and the penalty parameters are deliberately left unmapped. Titan's
+    # NB: the penalty parameters are deliberately left unmapped. Titan's
     # textGenerationConfig accepts only maxTokenCount, stopSequences, temperature and
     # topP, so renaming them would forward a key Bedrock still ignores.
     @classmethod
     def completions_to_model(cls, payload, config):
+        _raise_for_unsupported_top_k(payload, "AWS Titan")
+
         n = payload.pop("n", 1)
         if n != 1:
             raise AIGatewayException(
@@ -123,13 +141,12 @@ class AWSTitanAdapter(ProviderAdapter):
 
 
 class AI21Adapter(ProviderAdapter):
-    # NB: `top_k` is deliberately left unmapped. Jurassic models expose `topKReturn`,
-    # which controls how many alternative tokens are reported rather than top-k
-    # sampling, so mapping `top_k` onto it would change the response instead of the
-    # sampling behaviour. The penalty parameters are objects here, not scalars, so
-    # they need a structural transform rather than a rename.
+    # NB: the penalty parameters are objects here, not scalars, so they need a
+    # structural transform rather than a rename.
     @classmethod
     def completions_to_model(cls, payload, config):
+        _raise_for_unsupported_top_k(payload, "AI21 Jurassic")
+
         return rename_payload_keys(
             payload,
             {

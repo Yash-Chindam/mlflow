@@ -518,6 +518,43 @@ async def test_bedrock_titan_rejects_top_p_zero(aws_config):
     mock_request.assert_not_called()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_name", "model_family"),
+    [
+        ("amazon.titan-tg1-large", "AWS Titan"),
+        ("ai21.j2-ultra", "AI21 Jurassic"),
+        ("ai21.j2-mid", "AI21 Jurassic"),
+    ],
+)
+async def test_bedrock_rejects_top_k(model_name, model_family):
+    # Neither model family supports top-k sampling, so `top_k` is rejected rather than
+    # accepted and silently dropped.
+    config = {
+        "name": "completions",
+        "endpoint_type": "llm/v1/completions",
+        "model": {"provider": "bedrock", "name": model_name},
+    }
+    provider = AmazonBedrockProvider(
+        EndpointConfig(**_merge_model_and_aws_config(config, {"aws_region": "us-east-1"}))
+    )
+    payload = completions.RequestPayload(prompt="This is a test", max_tokens=1000, top_k=10)
+
+    with (
+        mock.patch(
+            "mlflow.gateway.providers.bedrock.AmazonBedrockProvider._request"
+        ) as mock_request,
+        pytest.raises(
+            AIGatewayException, match=f"'top_k' is not supported for {model_family} models"
+        ) as exc_info,
+    ):
+        await provider.completions(payload)
+
+    assert exc_info.value.status_code == 422
+    assert "Received value: '10'" in exc_info.value.detail
+    mock_request.assert_not_called()
+
+
 @pytest.mark.parametrize(
     ("model_name", "expected"),
     [
